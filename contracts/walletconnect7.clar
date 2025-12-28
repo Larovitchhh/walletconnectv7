@@ -1,37 +1,77 @@
-;; v7-ultra-light
-(define-non-fungible-token VIP-CARD uint)
+;; --------------------------------------------------
+;; LEVEL 7 - VIP MEMBERSHIP NFT (AppKit Optimized)
+;; --------------------------------------------------
 
+;; 1. Definir el NFT (Sin depender de traits externos para evitar errores de nodo)
+(define-non-fungible-token VIP-MEMBER uint)
+
+;; 2. Constantes de Seguridad
+(define-constant ERR-NOT-AUTHORIZED (err u401))
+(define-constant ERR-NOT-VIP (err u403))
+(define-constant ERR-ALREADY-MINTED (err u406))
+(define-constant VIP-THRESHOLD u10000000) ;; 10 STX
+
+;; 3. Variables de Estado
 (define-data-var last-id uint u0)
 (define-data-var owner principal tx-sender)
 
-(define-map donations principal uint)
-(define-map has-nft principal bool)
+;; 4. Mapas para el Frontend (AppKit)
+(define-map user-contributions principal uint)
+(define-map minted-wallets principal bool)
 
-(define-public (donate (amount uint))
-    (let ((prev (default-to u0 (map-get? donations tx-sender))))
+;; --- FUNCIONES PÚBLICAS ---
+
+;; Donar STX para subir de rango
+(define-public (donate-stx (amount uint))
+    (let (
+        (current-total (default-to u0 (map-get? user-contributions tx-sender)))
+    )
+        (asserts! (> amount u0) (err u100))
+        ;; Transferencia directa al owner
         (try! (stx-transfer? amount tx-sender (var-get owner)))
-        (map-set donations tx-sender (+ prev amount))
+        ;; Actualizar progreso
+        (map-set user-contributions tx-sender (+ current-total amount))
         (ok true)
     )
 )
 
+;; Reclamar NFT de Socio (Solo VIPs)
+;; Esta función es la que llamarás desde el botón "Claim" en tu dApp con Reown
 (define-public (claim-membership)
     (let (
-        (total (default-to u0 (map-get? donations tx-sender)))
-        (new-id (+ (var-get last-id) u1))
+        (total-donated (default-to u0 (map-get? user-contributions tx-sender)))
+        (next-id (+ (var-get last-id) u1))
     )
-        (asserts! (>= total u10000000) (err u403))
-        (asserts! (is-none (map-get? has-nft tx-sender)) (err u406))
-        (try! (nft-mint? VIP-CARD new-id tx-sender))
-        (var-set last-id new-id)
-        (map-set has-nft tx-sender true)
-        (ok new-id)
+        ;; VALIDACIÓN 1: ¿Ha donado suficiente?
+        (asserts! (>= total-donated VIP-THRESHOLD) ERR-NOT-VIP)
+        ;; VALIDACIÓN 2: ¿Ya tiene el NFT? (Evitar duplicados)
+        (asserts! (is-none (map-get? minted-wallets tx-sender)) ERR-ALREADY-MINTED)
+
+        ;; MINTEAR NFT
+        (try! (nft-mint? VIP-MEMBER next-id tx-sender))
+        
+        ;; Actualizar estado
+        (var-set last-id next-id)
+        (map-set minted-wallets tx-sender true)
+        (ok next-id)
     )
 )
 
-(define-read-only (get-info (user principal))
+;; --- FUNCIONES DE LECTURA (Para tu UI de Reown) ---
+
+(define-read-only (get-membership-status (user principal))
+    (let (
+        (donated (default-to u0 (map-get? user-contributions user)))
+        (has-nft (default-to false (map-get? minted-wallets user)))
+    )
     {
-        amt: (default-to u0 (map-get? donations user)),
-        nft: (default-to false (map-get? has-nft user))
-    }
+        donated-amount: donated,
+        is-eligible: (>= donated VIP-THRESHOLD),
+        has-claimed: has-nft,
+        next-vip-id: (+ (var-get last-id) u1)
+    })
+)
+
+(define-read-only (get-nft-owner (id uint))
+    (ok (nft-get-owner? VIP-MEMBER id))
 )
