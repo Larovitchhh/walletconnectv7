@@ -1,87 +1,77 @@
 ;; --------------------------------------------------
-;; Level 7 - VIP Membership NFT (SIP-009 Standard)
+;; LEVEL 7 - VIP MEMBERSHIP NFT (AppKit Optimized)
 ;; --------------------------------------------------
 
-;; Estándar NFT
-(impl-trait 'SP2PABAF9FTAJYNFZH93XENAJ8FVY99RRM50D2JG9.nft-trait.nft-trait)
+;; 1. Definir el NFT (Sin depender de traits externos para evitar errores de nodo)
+(define-non-fungible-token VIP-MEMBER uint)
 
-;; Constantes
+;; 2. Constantes de Seguridad
 (define-constant ERR-NOT-AUTHORIZED (err u401))
 (define-constant ERR-NOT-VIP (err u403))
 (define-constant ERR-ALREADY-MINTED (err u406))
 (define-constant VIP-THRESHOLD u10000000) ;; 10 STX
 
-;; Definición del NFT
-(define-non-fungible-token VIP-Member uint)
+;; 3. Variables de Estado
+(define-data-var last-id uint u0)
+(define-data-var owner principal tx-sender)
 
-;; Variables
-(define-data-var last-token-id uint u0)
-(define-data-var contract-owner principal tx-sender)
+;; 4. Mapas para el Frontend (AppKit)
+(define-map user-contributions principal uint)
+(define-map minted-wallets principal bool)
 
-;; Mapas del sistema anterior
-(define-map user-stats principal { amount: uint })
-(define-map has-minted principal bool)
+;; --- FUNCIONES PÚBLICAS ---
 
-;; --- Funciones de NFT (Estándar SIP-009) ---
-
-(define-read-only (get-last-token-id)
-    (ok (var-get last-token-id))
-)
-
-(define-read-only (get-token-uri (id uint))
-    (ok (some "https://tu-api.com/metadata/vip.json"))
-)
-
-(define-read-only (get-owner (id uint))
-    (ok (nft-get-owner? VIP-Member id))
-)
-
-(define-public (transfer (id uint) (sender principal) (recipient principal))
-    (begin
-        (assert! (is-eq tx-sender sender) ERR-NOT-AUTHORIZED)
-        (nft-transfer? VIP-Member id sender recipient)
+;; Donar STX para subir de rango
+(define-public (donate-stx (amount uint))
+    (let (
+        (current-total (default-to u0 (map-get? user-contributions tx-sender)))
     )
-)
-
-;; --- Funciones de Lógica VIP ---
-
-;; 1. Donar para ser VIP
-(define-public (donate (amount uint))
-    (let ((current-amount (get amount (default-to { amount: u0 } (map-get? user-stats tx-sender)))))
-        (try! (stx-transfer? amount tx-sender (var-get contract-owner)))
-        (map-set user-stats tx-sender { amount: (+ current-amount amount) })
+        (asserts! (> amount u0) (err u100))
+        ;; Transferencia directa al owner
+        (try! (stx-transfer? amount tx-sender (var-get owner)))
+        ;; Actualizar progreso
+        (map-set user-contributions tx-sender (+ current-total amount))
         (ok true)
     )
 )
 
-;; 2. RECLAMAR NFT (Solo para VIPs)
-;; Aquí es donde brilla AppKit con un botón de "Claim NFT"
-(define-public (claim-membership-nft)
+;; Reclamar NFT de Socio (Solo VIPs)
+;; Esta función es la que llamarás desde el botón "Claim" en tu dApp con Reown
+(define-public (claim-membership)
     (let (
-        (stats (default-to { amount: u0 } (map-get? user-stats tx-sender)))
-        (new-id (+ (var-get last-token-id) u1))
+        (total-donated (default-to u0 (map-get? user-contributions tx-sender)))
+        (next-id (+ (var-get last-id) u1))
     )
-        ;; Check: ¿Es VIP?
-        (asserts! (>= (get amount stats) VIP-THRESHOLD) ERR-NOT-VIP)
-        ;; Check: ¿Ya tiene uno?
-        (asserts! (is-none (map-get? has-minted tx-sender)) ERR-ALREADY-MINTED)
+        ;; VALIDACIÓN 1: ¿Ha donado suficiente?
+        (asserts! (>= total-donated VIP-THRESHOLD) ERR-NOT-VIP)
+        ;; VALIDACIÓN 2: ¿Ya tiene el NFT? (Evitar duplicados)
+        (asserts! (is-none (map-get? minted-wallets tx-sender)) ERR-ALREADY-MINTED)
 
-        ;; Mintear NFT
-        (try! (nft-mint? VIP-Member new-id tx-sender))
+        ;; MINTEAR NFT
+        (try! (nft-mint? VIP-MEMBER next-id tx-sender))
         
         ;; Actualizar estado
-        (var-set last-token-id new-id)
-        (map-set has-minted tx-sender true)
-        (ok new-id)
+        (var-set last-id next-id)
+        (map-set minted-wallets tx-sender true)
+        (ok next-id)
     )
 )
 
-;; --- Lectura para el Frontend ---
+;; --- FUNCIONES DE LECTURA (Para tu UI de Reown) ---
 
-(define-read-only (get-user-status (user principal))
+(define-read-only (get-membership-status (user principal))
+    (let (
+        (donated (default-to u0 (map-get? user-contributions user)))
+        (has-nft (default-to false (map-get? minted-wallets user)))
+    )
     {
-        total-donated: (get amount (default-to { amount: u0 } (map-get? user-stats user))),
-        can-claim: (and (>= (get amount (default-to { amount: u0 } (map-get? user-stats user))) VIP-THRESHOLD) (is-none (map-get? has-minted user))),
-        has-nft: (default-to false (map-get? has-minted user))
-    }
+        donated-amount: donated,
+        is-eligible: (>= donated VIP-THRESHOLD),
+        has-claimed: has-nft,
+        next-vip-id: (+ (var-get last-id) u1)
+    })
+)
+
+(define-read-only (get-nft-owner (id uint))
+    (ok (nft-get-owner? VIP-MEMBER id))
 )
